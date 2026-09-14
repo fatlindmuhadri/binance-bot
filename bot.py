@@ -49,6 +49,7 @@ def get_exchange_info():
         if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL':
             symbol = s['symbol']
             max_lev = 20
+            # Merr levën maksimale të saktë nga leverageBrackets për çdo coin specifik
             for bracket in s.get('brackets', []):
                 if 'initialLeverage' in bracket:
                     max_lev = max(max_lev, bracket['initialLeverage'])
@@ -94,7 +95,7 @@ def place_binance_order(symbol, side, quantity):
     return binance_request('POST', endpoint, params)
 
 def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl):
-    """Vendos automatikisht mbylljet e pjesshme (TP1-TP4) dhe Stop Loss në Binance"""
+    """Vendos automatikisht mbylljet e pjesshme (TP1-TP4) dhe Stop Loss në Binance që të shfaqen në panel"""
     close_side = "SELL" if side == "BUY" else "BUY"
     part_qty = round(quantity / 4, 3)  # Ndaj pozicionin në 4 pjesë të barabarta (25% secila)
     if part_qty <= 0:
@@ -102,7 +103,7 @@ def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
 
     tps = [tp1, tp2, tp3, tp4]
     
-    # Vendos 4 urdhërat Limit për Take Profit me reduceOnly
+    # 1. Vendos 4 urdhërat Limit për Take Profit me reduceOnly (shfaqen te Open Orders)
     for tp_price in tps:
         params = {
             "symbol": symbol,
@@ -111,18 +112,18 @@ def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
             "timeInForce": "GTC",
             "quantity": part_qty,
             "price": round(tp_price, 4),
-            "reduceOnly": True
+            "reduceOnly": "true"
         }
         binance_request('POST', "/fapi/v1/order", params)
 
-    # Vendos Stop Loss (STOP_MARKET) për të gjithë sasinë
+    # 2. Vendos Stop Loss (STOP_MARKET) për të gjithë sasinë (shfaqet te Open Orders)
     sl_params = {
         "symbol": symbol,
         "side": close_side,
         "type": "STOP_MARKET",
         "stopPrice": round(sl, 4),
         "quantity": quantity,
-        "reduceOnly": True
+        "reduceOnly": "true"
     }
     binance_request('POST', "/fapi/v1/order", sl_params)
 
@@ -172,8 +173,8 @@ def scan_and_execute_trades():
         if symbol in active_symbols:
             continue
             
-        max_lev = coin["max_leverage"]
-        chosen_lev = min(max_lev, 75)  # Përdor leverage max deri në 75x
+        # Përdor levën maksimale të saktë për çdo coin (p.sh. 75x, 100x, etj.)
+        chosen_lev = coin["max_leverage"]
         
         setup = analyze_high_probability_setup(symbol)
         
@@ -226,14 +227,14 @@ def scan_and_execute_trades():
                 trades_executed_today += 1
                 active_symbols.add(symbol)
                 
-                # 2. Vendos automatikisht TP1-TP4 dhe Stop Loss në Binance
+                # 2. Vendos automatikisht TP1-TP4 dhe Stop Loss në Binance që të duken në panel
                 place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
                 
                 # 3. Dërgo njoftimin në Telegram
                 signal_message = (
                     f"🚨 **PREMIUM EXECUTED SIGNAL ({trades_executed_today}/10)** 🚨\n"
                     f"🟢 **{symbol} {display_side}**\n"
-                    f"⚙️ Margin: **Cross, {chosen_lev}X**\n"
+                    f"⚙️ Margin: **Cross, {chosen_lev}X (Max Lev)**\n"
                     f"📍 ENTRY: `{entry_price:.4f}`\n\n"
                     f"🎯 **TARGETS (Automated Scaling):**\n"
                     f"1. [`{tp1:.4f}`] (75% fitim)\n"
@@ -243,13 +244,13 @@ def scan_and_execute_trades():
                     f"❌ **STOPLOSS:** [`{sl:.4f}`] (Risk ~150%)"
                 )
                 send_telegram_message(signal_message)
-                print(f"Pozicioni u hap dhe TP/SL u vendosën në Binance për {symbol}")
+                print(f"Pozicioni u hap dhe TP/SL u vendosën në Binance për {symbol} me levë {chosen_lev}x")
                 
                 time.sleep(10)
 
 # --- NISJA E BOTIT ---
 if __name__ == "__main__":
-    send_telegram_message("🤖 Boti u nis! Duke kërkuar max 10 tregti cilësore në ditë me Cross, Max Lev, TP (75%-300%) dhe SL automatik.")
+    send_telegram_message("🤖 Boti u nis me sukses! Duke përdorur Levën Maksimale të çdo coin-i, Cross, TP dhe SL automatik.")
     
     while True:
         scan_and_execute_trades()
