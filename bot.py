@@ -46,10 +46,10 @@ def get_exchange_info():
     symbols_data = []
     
     for s in response.get('symbols', []):
-        if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL':
+        # Filtrojmë vetëm monedhat që mbarojnë me USDT (përjashtojmë USDC, BUSD, etj.)
+        if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT':
             symbol = s['symbol']
             max_lev = 20
-            # Merr levën maksimale të saktë nga leverageBrackets për çdo coin specifik
             for bracket in s.get('brackets', []):
                 if 'initialLeverage' in bracket:
                     max_lev = max(max_lev, bracket['initialLeverage'])
@@ -82,7 +82,7 @@ def get_account_balance():
     for asset in account_info.get('assets', []):
         if asset['asset'] == 'USDT':
             return float(asset['availableBalance'])
-    return 5000.0
+    return 0.0
 
 def place_binance_order(symbol, side, quantity):
     endpoint = "/fapi/v1/order"
@@ -95,15 +95,13 @@ def place_binance_order(symbol, side, quantity):
     return binance_request('POST', endpoint, params)
 
 def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl):
-    """Vendos automatikisht mbylljet e pjesshme (TP1-TP4) dhe Stop Loss në Binance që të shfaqen në panel"""
     close_side = "SELL" if side == "BUY" else "BUY"
-    part_qty = round(quantity / 4, 3)  # Ndaj pozicionin në 4 pjesë të barabarta (25% secila)
+    part_qty = round(quantity / 4, 3)
     if part_qty <= 0:
         part_qty = quantity
 
     tps = [tp1, tp2, tp3, tp4]
     
-    # 1. Vendos 4 urdhërat Limit për Take Profit me reduceOnly (shfaqen te Open Orders)
     for tp_price in tps:
         params = {
             "symbol": symbol,
@@ -116,7 +114,6 @@ def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
         }
         binance_request('POST', "/fapi/v1/order", params)
 
-    # 2. Vendos Stop Loss (STOP_MARKET) për të gjithë sasinë (shfaqet te Open Orders)
     sl_params = {
         "symbol": symbol,
         "side": close_side,
@@ -143,7 +140,6 @@ def analyze_high_probability_setup(symbol):
     price_prev = float(candles_15m[-3][4])
     change_pct = abs((price_now - price_prev) / price_prev) * 100
 
-    # Filtër: Kërkon lëvizje të fortë/momentum mbi 1.2%
     if change_pct < 1.2:
         return None
 
@@ -157,12 +153,11 @@ def analyze_high_probability_setup(symbol):
 def scan_and_execute_trades():
     global trades_executed_today, active_symbols
     
-    # Kufiri max 10 tregti në ditë
     if trades_executed_today >= 10:
-        print("U arrit limiti prej 10 tregtimesh për sot. Boti po pret...")
+        print("U arrit limiti prej 10 tregtimesh për sot.")
         return
 
-    print(f"Duke kërkuar sinjale me cilësi të lartë (Tregtia {trades_executed_today + 1}/10)...")
+    print(f"Duke kërkuar sinjale USDT (Tregtia {trades_executed_today + 1}/10)...")
     coins = get_exchange_info()
     
     for coin in coins:
@@ -173,9 +168,7 @@ def scan_and_execute_trades():
         if symbol in active_symbols:
             continue
             
-        # Përdor levën maksimale të saktë për çdo coin (p.sh. 75x, 100x, etj.)
         chosen_lev = coin["max_leverage"]
-        
         setup = analyze_high_probability_setup(symbol)
         
         if setup:
@@ -186,21 +179,17 @@ def scan_and_execute_trades():
             entry_price = float(klines_15m[-1][4])
             set_cross_and_leverage(symbol, chosen_lev)
             
-            # Llogaritja e sasisë (5% e balancës totale me leverage)
             available_balance = get_account_balance()
-            position_usdt = (available_balance * 0.05) * chosen_lev
+            position_usdt = available_balance * 0.05 * chosen_lev
             quantity = round(position_usdt / entry_price, 3)
             
             if quantity <= 0:
                 continue
 
-            # Targetet e fitimit në bazë të leverage-it: TP1=75%, TP2=150%, TP3=225%, TP4=300%
             target_pct_1 = 0.75 / chosen_lev
             target_pct_2 = 1.50 / chosen_lev
             target_pct_3 = 2.25 / chosen_lev
             target_pct_4 = 3.00 / chosen_lev
-            
-            # Stop Loss në bazë të leverage-it: 150% humbje në llogari
             sl_pct = 1.50 / chosen_lev  
 
             if setup == "LONG":
@@ -220,39 +209,31 @@ def scan_and_execute_trades():
                 tp4 = entry_price * (1 - target_pct_4)
                 sl = entry_price * (1 + sl_pct)
 
-            # 1. Hap pozicionin kryesor në Binance
             order_response = place_binance_order(symbol, side, quantity)
             
             if 'orderId' in order_response:
                 trades_executed_today += 1
                 active_symbols.add(symbol)
                 
-                # 2. Vendos automatikisht TP1-TP4 dhe Stop Loss në Binance që të duken në panel
                 place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
                 
-                # 3. Dërgo njoftimin në Telegram
                 signal_message = (
-                    f"🚨 **PREMIUM EXECUTED SIGNAL ({trades_executed_today}/10)** 🚨\n"
+                    f"🚨 **USDT FUTURES SIGNAL ({trades_executed_today}/10)** 🚨\n"
                     f"🟢 **{symbol} {display_side}**\n"
-                    f"⚙️ Margin: **Cross, {chosen_lev}X (Max Lev)**\n"
+                    f"⚙️ Margin: **Cross, {chosen_lev}X**\n"
                     f"📍 ENTRY: `{entry_price:.4f}`\n\n"
-                    f"🎯 **TARGETS (Automated Scaling):**\n"
-                    f"1. [`{tp1:.4f}`] (75% fitim)\n"
-                    f"2. [`{tp2:.4f}`] (150% fitim)\n"
-                    f"3. [`{tp3:.4f}`] (225% fitim)\n"
-                    f"4. [`{tp4:.4f}`] (300% fitim)\n\n"
-                    f"❌ **STOPLOSS:** [`{sl:.4f}`] (Risk ~150%)"
+                    f"🎯 **TARGETS:**\n"
+                    f"1. `{tp1:.4f}`\n2. `{tp2:.4f}`\n3. `{tp3:.4f}`\n4. `{tp4:.4f}`\n\n"
+                    f"❌ **STOPLOSS:** `{sl:.4f}`"
                 )
                 send_telegram_message(signal_message)
-                print(f"Pozicioni u hap dhe TP/SL u vendosën në Binance për {symbol} me levë {chosen_lev}x")
+                print(f"Pozicioni u hap për {symbol} ( USDT )")
                 
                 time.sleep(10)
 
-# --- NISJA E BOTIT ---
 if __name__ == "__main__":
-    send_telegram_message("🤖 Boti u nis me sukses! Duke përdorur Levën Maksimale të çdo coin-i, Cross, TP dhe SL automatik.")
+    send_telegram_message("🤖 Boti u nis! Duke tregtuar vetëm çiftet USDT me Cross dhe Levë Maksimale.")
     
     while True:
         scan_and_execute_trades()
-        # Kontrollon tregun çdo 10 minuta
         time.sleep(600)
