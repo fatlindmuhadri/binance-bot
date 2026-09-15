@@ -43,8 +43,8 @@ current_day = datetime.now().day
 
 def send_telegram_message(message):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
+        url = f"https://telegram.org{TELEGRAM_TOKEN.strip()}/sendMessage"
+        payload = {"chat_id": str(CHAT_ID).strip(), "text": message, "parse_mode": "Markdown"}
         requests.post(url, data=payload)
     except Exception as e:
         print(f"Gabim në dërgimin e Telegram: {e}")
@@ -103,8 +103,19 @@ def place_binance_order(symbol, side, quantity):
     }
     return binance_request('POST', endpoint, params)
 
+# --- PËRDITËSIMI I MADH I METODËS ALGO ---
 def place_algo_order(symbol, side, algo_type, trigger_price, quantity):
     endpoint = "/fapi/v1/algoOrder"
+    
+    # Korrigjimi i sasisë (Lot Size) bazuar në vlerën e monedhës
+    if trigger_price < 5:
+        quantity = round(quantity, 0)  # Numër i plotë për monedha të vogla (TRUMP, XRP, etj.)
+    else:
+        quantity = round(quantity, 2)  # Max 2 dhjetore për BTC, ETH
+        
+    if quantity <= 0:
+        quantity = 1.0  # Sigurohemi që sasia nuk bëhet kurrë zero
+        
     params = {
         "symbol": symbol,
         "side": side,
@@ -113,7 +124,15 @@ def place_algo_order(symbol, side, algo_type, trigger_price, quantity):
         "quantity": quantity,
         "reduceOnly": "true"
     }
-    return binance_request('POST', endpoint, params)
+    
+    response = binance_request('POST', endpoint, params)
+    
+    # Soni i Alarmit: Na njofton në Telegram nëse Binance refuzon TP/SL
+    if 'code' in response or 'msg' in response:
+        error_msg = f"⚠️ **Gabim Algo Order ({symbol})**: {response.get('msg', 'Unknown Error')}"
+        send_telegram_message(error_msg)
+        
+    return response
 
 def analyze_high_probability_setup(symbol):
     candles_4h = get_klines(symbol, "4h", 10)
@@ -186,29 +205,26 @@ def scan_and_execute_trades():
             if quantity <= 0:
                 continue
 
-            target_quantity = round(quantity / 4, 3)
-            if target_quantity <= 0:
-                continue
-            
-            actual_total_quantity = round(target_quantity * 4, 3)
+            target_quantity = quantity / 4
+            actual_total_quantity = quantity
 
             side = "BUY" if setup == "LONG" else "SELL"
             algo_side = "SELL" if setup == "LONG" else "BUY"
             display_side = "LONG (buy)" if setup == "LONG" else "SHORT (sell)"
 
-            # --- NDRYSHIMI: LLOGARITJA ME STOP LOSS NË 2.5% ---
+            # SL në 2.5% dhe 4 Targete Take Profit
             if setup == "LONG":
-                sl_price = entry_price * 0.975  # SL: -2.5%
-                tp1 = entry_price * 1.012       # TP1: +1.2%
-                tp2 = entry_price * 1.020       # TP2: +2.0%
-                tp3 = entry_price * 1.030       # TP3: +3.0%
-                tp4 = entry_price * 1.045       # TP4: +4.5%
+                sl_price = entry_price * 0.975
+                tp1 = entry_price * 1.012
+                tp2 = entry_price * 1.020
+                tp3 = entry_price * 1.030
+                tp4 = entry_price * 1.045
             else:
-                sl_price = entry_price * 1.025  # SL: +2.5%
-                tp1 = entry_price * 0.988       # TP1: -1.2%
-                tp2 = entry_price * 0.980       # TP2: -2.0%
-                tp3 = entry_price * 0.970       # TP3: -3.5%
-                tp4 = entry_price * 0.955       # TP4: -4.5%
+                sl_price = entry_price * 1.025
+                tp1 = entry_price * 0.988
+                tp2 = entry_price * 0.980
+                tp3 = entry_price * 0.970
+                tp4 = entry_price * 0.955
 
             order_response = place_binance_order(symbol, side, actual_total_quantity)
             
@@ -216,7 +232,7 @@ def scan_and_execute_trades():
                 trades_executed_today += 1
                 active_symbols.add(symbol)
                 
-                # Ekzekutimi i urdhrave Algo në Binance me vlerat e reja
+                # Ekzekutimi dhe formatimi i saktë i urdhrave në Binance
                 place_algo_order(symbol, algo_side, "STOP_MARKET", sl_price, actual_total_quantity)
                 place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp1, target_quantity)
                 place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp2, target_quantity)
