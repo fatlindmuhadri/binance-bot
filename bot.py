@@ -12,6 +12,30 @@ CHAT_ID = "5458100041"
 
 BASE_URL = "https://testnet.binancefuture.com"  # Për Testnet/Demo (ndryshoje në live nëse kalon real)
 
+# --- LISTA E COIN-EVE DHE LEVA MAX ---
+CUSTOM_LEVERAGE_MAP = {
+    "AAVEUSDT": 75, "ADAUSDT": 75, "ALGOUSDT": 50, "ANKRUSDT": 50, "APEUSDT": 50,
+    "APTUSDT": 50, "ARBUSDT": 75, "ATOMUSDT": 75, "AVAXUSDT": 75, "AXSUSDT": 50,
+    "BATUSDT": 50, "BNBUSDT": 100, "BOMEUSDT": 50, "BONKUSDT": 50, "BTCUSDT": 125,
+    "CAKEUSDT": 50, "CELOUSDT": 50, "CHZUSDT": 50, "COMPUSDT": 50, "CRVUSDT": 50,
+    "DASHUSDT": 50, "DOGEUSDT": 75, "DOTUSDT": 75, "EGLDUSDT": 50, "ENJUSDT": 50,
+    "ENSUSDT": 50, "EOSUSDT": 50, "ETCUSDT": 75, "ETHUSDT": 125, "FETUSDT": 75,
+    "FILUSDT": 75, "FLOKIUSDT": 50, "FLOWUSDT": 50, "FTMUSDT": 75, "FXSUSDT": 50,
+    "GALAUSDT": 50, "GMTUSDT": 50, "GMXUSDT": 50, "GRTUSDT": 75, "HBARUSDT": 50,
+    "ICPUSDT": 75, "IMXUSDT": 75, "INJUSDT": 75, "IOSTUSDT": 50, "IOTAUSDT": 50,
+    "JASMYUSDT": 50, "JUPUSDT": 50, "KAVAUSDT": 50, "KSMUSDT": 50, "LDOUSDT": 75,
+    "LINKUSDT": 75, "LTCUSDT": 75, "MANAUSDT": 50, "MASKUSDT": 50, "MATICUSDT": 75,
+    "NEARUSDT": 75, "NEOUSDT": 50, "NOTUSDT": 50, "OGNUSDT": 50, "OMUSDT": 50,
+    "ONDOUSDT": 50, "OPUSDT": 75, "PENDLEUSDT": 50, "PEPEUSDT": 75, "PERPUSDT": 50,
+    "POLUSDT": 75, "POLYXUSDT": 50, "PYTHUSDT": 50, "QTUMUSDT": 50, "RAYUSDT": 50,
+    "RENDERUSDT": 75, "RUNEUSDT": 75, "RVNUSDT": 50, "SANDUSDT": 50, "SEIUSDT": 75,
+    "SHIBUSDT": 75, "SKLUSDT": 50, "SNXUSDT": 50, "SOLUSDT": 125, "SSVUSDT": 50,
+    "STEEMUSDT": 50, "STXUSDT": 75, "SUIUSDT": 75, "SUSHIUSDT": 50, "THETAUSDT": 50,
+    "TIAUSDT": 75, "TNSRUSDT": 50, "TRUMPUSDT": 50, "TRXUSDT": 75, "TURBOUSDT": 50,
+    "UNIUSDT": 75, "WLDUSDT": 75, "WOOUSDT": 50, "XLMUSDT": 75, "XRPUSDT": 75,
+    "XTZUSDT": 50, "ZECUSDT": 50, "ZENUSDT": 50, "ZROUSDT": 50
+}
+
 trades_executed_today = 0
 active_symbols = set()
 
@@ -39,23 +63,6 @@ def binance_request(method, endpoint, params=None):
     elif method == 'POST':
         response = requests.post(url, headers=headers, params=params)
     return response.json()
-
-def get_exchange_info():
-    url = f"{BASE_URL}/fapi/v1/exchangeInfo"
-    response = requests.get(url).json()
-    symbols_data = []
-    
-    for s in response.get('symbols', []):
-        # Filtrojmë vetëm monedhat që mbarojnë me USDT (përjashtojmë USDC, BUSD, etj.)
-        if s['status'] == 'TRADING' and s['contractType'] == 'PERPETUAL' and s['quoteAsset'] == 'USDT':
-            symbol = s['symbol']
-            max_lev = 20
-            for bracket in s.get('brackets', []):
-                if 'initialLeverage' in bracket:
-                    max_lev = max(max_lev, bracket['initialLeverage'])
-            symbols_data.append({"symbol": symbol, "max_leverage": max_lev})
-            
-    return symbols_data
 
 def set_cross_and_leverage(symbol, leverage):
     try:
@@ -94,42 +101,11 @@ def place_binance_order(symbol, side, quantity):
     }
     return binance_request('POST', endpoint, params)
 
-def place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl):
-    close_side = "SELL" if side == "BUY" else "BUY"
-    part_qty = round(quantity / 4, 3)
-    if part_qty <= 0:
-        part_qty = quantity
-
-    tps = [tp1, tp2, tp3, tp4]
-    
-    for tp_price in tps:
-        params = {
-            "symbol": symbol,
-            "side": close_side,
-            "type": "LIMIT",
-            "timeInForce": "GTC",
-            "quantity": part_qty,
-            "price": round(tp_price, 4),
-            "reduceOnly": "true"
-        }
-        binance_request('POST', "/fapi/v1/order", params)
-
-    sl_params = {
-        "symbol": symbol,
-        "side": close_side,
-        "type": "STOP_MARKET",
-        "stopPrice": round(sl, 4),
-        "quantity": quantity,
-        "reduceOnly": "true"
-    }
-    binance_request('POST', "/fapi/v1/order", sl_params)
-
 def analyze_high_probability_setup(symbol):
     candles_4h = get_klines(symbol, "4h", 10)
-    candles_1h = get_klines(symbol, "1h", 10)
     candles_15m = get_klines(symbol, "15m", 15)
     
-    if len(candles_4h) < 5 or len(candles_1h) < 5 or len(candles_15m) < 5:
+    if len(candles_4h) < 5 or len(candles_15m) < 5:
         return None
 
     close_4h_latest = float(candles_4h[-1][4])
@@ -157,18 +133,15 @@ def scan_and_execute_trades():
         print("U arrit limiti prej 10 tregtimesh për sot.")
         return
 
-    print(f"Duke kërkuar sinjale USDT (Tregtia {trades_executed_today + 1}/10)...")
-    coins = get_exchange_info()
+    print(f"Duke skanuar listën e pastër (Tregtia {trades_executed_today + 1}/10)...")
     
-    for coin in coins:
+    for symbol, max_lev in CUSTOM_LEVERAGE_MAP.items():
         if trades_executed_today >= 10:
             break
             
-        symbol = coin["symbol"]
         if symbol in active_symbols:
             continue
             
-        chosen_lev = coin["max_leverage"]
         setup = analyze_high_probability_setup(symbol)
         
         if setup:
@@ -177,37 +150,21 @@ def scan_and_execute_trades():
                 continue
                 
             entry_price = float(klines_15m[-1][4])
-            set_cross_and_leverage(symbol, chosen_lev)
+            set_cross_and_leverage(symbol, max_lev)
             
+            # --- INITIAL MARGIN: Fiks 2% i bilancit të disponueshëm (si në foto) ---
             available_balance = get_account_balance()
-            position_usdt = available_balance * 0.05 * chosen_lev
+            initial_margin_usdt = available_balance * 0.02  # 2% e bilancit
+            
+            # Vlera totale e pozicionit (Notional Size) = Initial Margin * Leva Max e Coin-it
+            position_usdt = initial_margin_usdt * max_lev
             quantity = round(position_usdt / entry_price, 3)
             
             if quantity <= 0:
                 continue
 
-            target_pct_1 = 0.75 / chosen_lev
-            target_pct_2 = 1.50 / chosen_lev
-            target_pct_3 = 2.25 / chosen_lev
-            target_pct_4 = 3.00 / chosen_lev
-            sl_pct = 1.50 / chosen_lev  
-
-            if setup == "LONG":
-                side = "BUY"
-                display_side = "LONG (buy)"
-                tp1 = entry_price * (1 + target_pct_1)
-                tp2 = entry_price * (1 + target_pct_2)
-                tp3 = entry_price * (1 + target_pct_3)
-                tp4 = entry_price * (1 + target_pct_4)
-                sl = entry_price * (1 - sl_pct)
-            else:
-                side = "SELL"
-                display_side = "SHORT (sell)"
-                tp1 = entry_price * (1 - target_pct_1)
-                tp2 = entry_price * (1 - target_pct_2)
-                tp3 = entry_price * (1 - target_pct_3)
-                tp4 = entry_price * (1 - target_pct_4)
-                sl = entry_price * (1 + sl_pct)
+            side = "BUY" if setup == "LONG" else "SELL"
+            display_side = "LONG (buy)" if setup == "LONG" else "SHORT (sell)"
 
             order_response = place_binance_order(symbol, side, quantity)
             
@@ -215,24 +172,20 @@ def scan_and_execute_trades():
                 trades_executed_today += 1
                 active_symbols.add(symbol)
                 
-                place_tp_sl_automatic_orders(symbol, side, quantity, tp1, tp2, tp3, tp4, sl)
-                
                 signal_message = (
-                    f"🚨 **USDT FUTURES SIGNAL ({trades_executed_today}/10)** 🚨\n"
+                    f"🚀 **MARKET SIGNAL ({trades_executed_today}/10)** 🚀\n"
                     f"🟢 **{symbol} {display_side}**\n"
-                    f"⚙️ Margin: **Cross, {chosen_lev}X**\n"
-                    f"📍 ENTRY: `{entry_price:.4f}`\n\n"
-                    f"🎯 **TARGETS:**\n"
-                    f"1. `{tp1:.4f}`\n2. `{tp2:.4f}`\n3. `{tp3:.4f}`\n4. `{tp4:.4f}`\n\n"
-                    f"❌ **STOPLOSS:** `{sl:.4f}`"
+                    f"⚙️ Margin Mode: **Cross, {max_lev}X**\n"
+                    f"💰 Initial Margin: **~{initial_margin_usdt:.2f} USDT** (2% e Balancës)\n"
+                    f"📍 ENTRY PRICE: `{entry_price:.4f}`"
                 )
                 send_telegram_message(signal_message)
-                print(f"Pozicioni u hap për {symbol} ( USDT )")
+                print(f"U hap pozicioni Market për {symbol} në Cross me Levë {max_lev}x")
                 
                 time.sleep(10)
 
 if __name__ == "__main__":
-    send_telegram_message("🤖 Boti u nis! Duke tregtuar vetëm çiftet USDT me Cross dhe Levë Maksimale.")
+    send_telegram_message("🤖 Boti u përditësua! Tani punon në Market, Cross, me Levë Max dhe 2% Initial Margin.")
     
     while True:
         scan_and_execute_trades()
