@@ -184,14 +184,6 @@ def scan_and_execute_trades():
                 time.sleep(10)
 
 if __name__ == "__main__":
-    send_telegram_message("🤖 Boti u përditësua! Pastrim total i gabimeve. Tani punon në Market, Cross, 2% Margin.")
-    
-    while TYPE := True:
-        scan_and_execute_trades()
-        time.sleep(600)
-
-
-if __name__ == "__main__":
     send_telegram_message("🤖 Boti u përditësua!")
     
     while TYPE := True:
