@@ -133,7 +133,7 @@ def scan_and_execute_trades():
         print("U arrit limiti prej 10 tregtimesh për sot.")
         return
 
-    print(f"Duke skanuar listën e pastër (Tregtia {trades_executed_today + 1}/10)...")
+    print(f"Duke skanuar listën (Tregtia {trades_executed_today + 1}/10)...")
     
     for symbol, max_lev in CUSTOM_LEVERAGE_MAP.items():
         if trades_executed_today >= 10:
@@ -152,11 +152,10 @@ def scan_and_execute_trades():
             entry_price = float(klines_15m[-1][4])
             set_cross_and_leverage(symbol, max_lev)
             
-            # --- INITIAL MARGIN: Fiks 2% i bilancit të disponueshëm (si në foto) ---
+            # --- INITIAL MARGIN: Fiks 2% i bilancit ---
             available_balance = get_account_balance()
-            initial_margin_usdt = available_balance * 0.02  # 2% e bilancit
+            initial_margin_usdt = available_balance * 0.02
             
-            # Vlera totale e pozicionit (Notional Size) = Initial Margin * Leva Max e Coin-it
             position_usdt = initial_margin_usdt * max_lev
             quantity = round(position_usdt / entry_price, 3)
             
@@ -180,12 +179,20 @@ def scan_and_execute_trades():
                     f"📍 ENTRY PRICE: `{entry_price:.4f}`"
                 )
                 send_telegram_message(signal_message)
-                print(f"U hap pozicioni Market për {symbol} në Cross me Levë {max_lev}x")
+                print(f"Pozicioni u hap për {symbol}")
                 
                 time.sleep(10)
 
 if __name__ == "__main__":
-    send_telegram_message("🤖 Boti u përditësua! Tani punon në Market, Cross, me Levë Max dhe 2% Initial Margin.")
+    send_telegram_message("🤖 Boti u përditësua! Pastrim total i gabimeve. Tani punon në Market, Cross, 2% Margin.")
+    
+    while TYPE := True:
+        scan_and_execute_trades()
+        time.sleep(600)
+
+
+if __name__ == "__main__":
+    send_telegram_message("🤖 Boti u përditësua!")
     
     while TYPE := True:
 
