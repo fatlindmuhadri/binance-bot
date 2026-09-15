@@ -43,7 +43,7 @@ current_day = datetime.now().day
 
 def send_telegram_message(message):
     try:
-        url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
         requests.post(url, data=payload)
     except Exception as e:
