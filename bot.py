@@ -3,6 +3,7 @@ import hmac
 import hashlib
 import requests
 from urllib.parse import urlencode
+from datetime import datetime
 
 # --- KONFIGURIMI I LLOGARISË ---
 API_KEY = "vCVPFQecFIZVIin8MlfQENB4RtQ3LvJOEwswEBAeGcUuJx6CHu5AayJvqbvfD3dd"
@@ -38,10 +39,11 @@ CUSTOM_LEVERAGE_MAP = {
 
 trades_executed_today = 0
 active_symbols = set()
+current_day = datetime.now().day
 
 def send_telegram_message(message):
     try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        url = f"https://telegram.org{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
         requests.post(url, data=payload)
     except Exception as e:
@@ -101,33 +103,56 @@ def place_binance_order(symbol, side, quantity):
     }
     return binance_request('POST', endpoint, params)
 
+def place_algo_order(symbol, side, algo_type, trigger_price, quantity):
+    endpoint = "/fapi/v1/algoOrder"
+    params = {
+        "symbol": symbol,
+        "side": side,
+        "type": algo_type,
+        "triggerPrice": round(trigger_price, 4),
+        "quantity": quantity,
+        "reduceOnly": "true"
+    }
+    return binance_request('POST', endpoint, params)
+
 def analyze_high_probability_setup(symbol):
     candles_4h = get_klines(symbol, "4h", 10)
     candles_15m = get_klines(symbol, "15m", 15)
     
-    if len(candles_4h) < 5 or len(candles_15m) < 5:
+    if not candles_4h or not candles_15m or len(candles_4h) < 5 or len(candles_15m) < 5:
         return None
 
-    close_4h_latest = float(candles_4h[-1][4])
-    close_4h_past = float(candles_4h[-4][4])
-    trend_4h = "BULLISH" if close_4h_latest > close_4h_past else "BEARISH"
+    try:
+        close_4h_latest = float(candles_4h[-1][4])
+        close_4h_past = float(candles_4h[-4][4])
+        trend_4h = "BULLISH" if close_4h_latest > close_4h_past else "BEARISH"
 
-    price_now = float(candles_15m[-1][4])
-    price_prev = float(candles_15m[-3][4])
-    change_pct = abs((price_now - price_prev) / price_prev) * 100
+        price_now = float(candles_15m[-1][4])
+        price_prev = float(candles_15m[-3][4])
+        change_pct = abs((price_now - price_prev) / price_prev) * 100
 
-    if change_pct < 1.2:
+        if change_pct < 1.2:
+            return None
+
+        if trend_4h == "BULLISH" and price_now > price_prev:
+            return "LONG"
+        elif trend_4h == "BEARISH" and price_now < price_prev:
+            return "SHORT"
+    except Exception as e:
+        print(f"Gabim gjatë përpunimit të qirinjve për {symbol}: {e}")
         return None
-
-    if trend_4h == "BULLISH" and price_now > price_prev:
-        return "LONG"
-    elif trend_4h == "BEARISH" and price_now < price_prev:
-        return "SHORT"
         
     return None
 
 def scan_and_execute_trades():
-    global trades_executed_today, active_symbols
+    global trades_executed_today, active_symbols, current_day
+    
+    now_day = datetime.now().day
+    if now_day != current_day:
+        current_day = now_day
+        trades_executed_today = 0
+        active_symbols.clear()
+        print("🔄 Ditë e re! Limiti i tregtimeve u rivendos.")
     
     if trades_executed_today >= 10:
         print("U arrit limiti prej 10 tregtimesh për sot.")
@@ -152,7 +177,6 @@ def scan_and_execute_trades():
             entry_price = float(klines_15m[-1][4])
             set_cross_and_leverage(symbol, max_lev)
             
-            # --- INITIAL MARGIN: Fiks 2% i bilancit ---
             available_balance = get_account_balance()
             initial_margin_usdt = available_balance * 0.02
             
@@ -162,24 +186,60 @@ def scan_and_execute_trades():
             if quantity <= 0:
                 continue
 
+            target_quantity = round(quantity / 4, 3)
+            if target_quantity <= 0:
+                continue
+            
+            actual_total_quantity = round(target_quantity * 4, 3)
+
             side = "BUY" if setup == "LONG" else "SELL"
+            algo_side = "SELL" if setup == "LONG" else "BUY"
             display_side = "LONG (buy)" if setup == "LONG" else "SHORT (sell)"
 
-            order_response = place_binance_order(symbol, side, quantity)
+            # --- NDRYSHIMI: LLOGARITJA ME STOP LOSS NË 2.5% ---
+            if setup == "LONG":
+                sl_price = entry_price * 0.975  # SL: -2.5%
+                tp1 = entry_price * 1.012       # TP1: +1.2%
+                tp2 = entry_price * 1.020       # TP2: +2.0%
+                tp3 = entry_price * 1.030       # TP3: +3.0%
+                tp4 = entry_price * 1.045       # TP4: +4.5%
+            else:
+                sl_price = entry_price * 1.025  # SL: +2.5%
+                tp1 = entry_price * 0.988       # TP1: -1.2%
+                tp2 = entry_price * 0.980       # TP2: -2.0%
+                tp3 = entry_price * 0.970       # TP3: -3.5%
+                tp4 = entry_price * 0.955       # TP4: -4.5%
+
+            order_response = place_binance_order(symbol, side, actual_total_quantity)
             
             if 'orderId' in order_response:
                 trades_executed_today += 1
                 active_symbols.add(symbol)
                 
+                # Ekzekutimi i urdhrave Algo në Binance me vlerat e reja
+                place_algo_order(symbol, algo_side, "STOP_MARKET", sl_price, actual_total_quantity)
+                place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp1, target_quantity)
+                place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp2, target_quantity)
+                place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp3, target_quantity)
+                place_algo_order(symbol, algo_side, "TAKE_PROFIT_MARKET", tp4, target_quantity)
+                
                 signal_message = (
-                    f"🚀 **MARKET SIGNAL ({trades_executed_today}/10)** 🚀\n"
+                    f"💎 **PREMIUM SIGNAL ({trades_executed_today}/10)** 💎\n"
                     f"🟢 **{symbol} {display_side}**\n"
-                    f"⚙️ Margin Mode: **Cross, {max_lev}X**\n"
-                    f"💰 Initial Margin: **~{initial_margin_usdt:.2f} USDT** (2% e Balancës)\n"
-                    f"📍 ENTRY PRICE: `{entry_price:.4f}`"
+                    f"Margin: **Cross, {max_lev}X**\n"
+                    f"ENTRY: `{entry_price:.5f}`\n"
+                    f"💰 Margin: `~{initial_margin_usdt:.2f} USDT`\n"
+                    f"---------------------\n"
+                    f"🎯 **TARGETS:**\n"
+                    f"1. `[{tp1:.5f}]` (25%)\n"
+                    f"2. `[{tp2:.5f}]` (25%)\n"
+                    f"3. `[{tp3:.5f}]` (25%)\n"
+                    f"4. `[{tp4:.5f}]` (25%)\n"
+                    f"---------------------\n"
+                    f"❌ **STOPLOSS (2.5%):** `[{sl_price:.5f}]`"
                 )
                 send_telegram_message(signal_message)
-                print(f"Pozicioni u hap për {symbol}")
+                print(f"Pozicioni Premium u hap me sukses (SL 2.5%) për {symbol}")
                 
                 time.sleep(10)
 
